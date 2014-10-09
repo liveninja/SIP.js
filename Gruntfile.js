@@ -4,10 +4,11 @@
 module.exports = function(grunt) {
 
   var pkg = grunt.file.readJSON('package.json');
+  var year = new Date().getFullYear()
   var banner = '\
 /*\n\
- * SIP version <%= pkg.version %>\n\
- * Copyright (c) 2014-<%= grunt.template.today("yyyy") %> Junction Networks, Inc <http://www.onsip.com>\n\
+ * SIP version ' + pkg.version + '\n\
+ * Copyright (c) 2014-' + year + ' Junction Networks, Inc <http://www.onsip.com>\n\
  * Homepage: http://sipjs.com\n\
  * License: http://sipjs.com/license/\n\
  *\n\
@@ -55,16 +56,16 @@ module.exports = function(grunt) {
           standalone: 'SIP'
         },
         postBundleCB: function (err, src, next) {
-          // prepend the banner and fill in placeholders
-          src = (banner + src).replace(/<%=(.*)%>/g, function (match, expr) {
-            // jshint evil:true
-            return eval(expr);
-          });
-          next(err, src);
+          // prepend the banner
+          next(err, banner + src);
         }
       }
     },
     copy: {
+      min: {
+        src: 'dist/<%= name %>-<%= pkg.version %>.min.js',
+        dest: 'dist/<%= name %>.min.js'
+      },
       dist: {
         src: 'dist/<%= name %>-<%= pkg.version %>.js',
         dest: 'dist/<%= name %>.js'
@@ -77,17 +78,15 @@ module.exports = function(grunt) {
       }
     },
     uglify: {
-      dist: {
-        files: {
-          'dist/<%= name %>.min.js': ['dist/<%= name %>.js']
-        }
-      },
       devel: {
         files: {
           'dist/<%= name %>-<%= pkg.version %>.min.js': ['dist/<%= name %>-<%= pkg.version %>.js']
         }
       },
       options: {
+        beautify : {
+          ascii_only : true
+        },
         banner: '<%= meta.banner %>'
       }
     },
@@ -190,7 +189,7 @@ module.exports = function(grunt) {
   // Task for building sip-devel.js (uncompressed), sip-X.Y.Z.js (uncompressed)
   // and sip-X.Y.Z.min.js (minified).
   // Both sip-devel.js and sip-X.Y.Z.js are the same file with different name.
-  grunt.registerTask('build', ['trimtrailingspaces:main', 'devel', 'copy', 'uglify']);
+  grunt.registerTask('build', ['trimtrailingspaces:main', 'devel', 'uglify', 'copy']);
 
   // Task for building sip-devel.js (uncompressed).
   grunt.registerTask('devel', ['jshint', 'browserify']);
