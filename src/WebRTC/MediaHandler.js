@@ -18,6 +18,7 @@ var MediaHandler = function(session, options) {
     'userMedia',
     'userMediaFailed',
     'iceGathering',
+    'iceCandidate',
     'iceComplete',
     'iceFailed',
     'iceDisconnected',
@@ -57,7 +58,9 @@ var MediaHandler = function(session, options) {
   /* Change 'url' to 'urls' whenever this issue is solved:
    * https://code.google.com/p/webrtc/issues/detail?id=2096
    */
-  servers.push({'url': stunServers});
+  [].concat(stunServers).forEach(function (server) {
+    servers.push({'url': server});
+  });
 
   length = turnServers.length;
   for (idx = 0; idx < length; idx++) {
@@ -73,6 +76,10 @@ var MediaHandler = function(session, options) {
   this.onIceCompleted.promise.then(function(pc) {
     self.logger.log('ICE Gathering Completed');
     self.emit('iceComplete', pc);
+    if (self.iceCheckingTimer) {
+      SIP.Timers.clearTimeout(self.iceCheckingTimer);
+      self.iceCheckingTimer = null;
+    }
   });
 
   this.peerConnection = new SIP.WebRTC.RTCPeerConnection({'iceServers': servers}, this.RTCConstraints);
@@ -88,6 +95,7 @@ var MediaHandler = function(session, options) {
   };
 
   this.peerConnection.onicecandidate = function(e) {
+    self.emit('iceCandidate', e);
     if (e.candidate) {
       self.logger.log('ICE candidate received: '+ (e.candidate.candidate === null ? null : e.candidate.candidate.trim()));
     } else {
@@ -107,6 +115,13 @@ var MediaHandler = function(session, options) {
 
   this.peerConnection.oniceconnectionstatechange = function() {  //need e for commented out case
     self.logger.log('ICE connection state changed to "'+ this.iceConnectionState +'"');
+
+    if (this.iceConnectionState === 'checking') {
+      self.iceCheckingTimer = SIP.Timers.setTimeout(function() {
+        self.logger.log('RTCIceChecking Timeout Triggered after '+config.iceCheckingTimeout+' micro seconds');
+        self.onIceCompleted.resolve(this);
+      }.bind(this), config.iceCheckingTimeout);
+    }
 
     if (this.iceConnectionState === 'failed') {
       self.emit('iceFailed', this);
@@ -257,7 +272,7 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
     this.emit('setDescription', rawDescription);
 
     var description = new SIP.WebRTC.RTCSessionDescription(rawDescription);
-    return new SIP.Utils.Promise(this.peerConnection.setRemoteDescription.bind(this.peerConnection, description));
+    return SIP.Utils.promisify(this.peerConnection, 'setRemoteDescription')(description);
   }},
 
 // Functions the session can use, but only because it's convenient for the application
@@ -405,17 +420,14 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
 
   createOfferOrAnswer: {writable: true, value: function createOfferOrAnswer (constraints) {
     var self = this;
-    var methodName, promisifiedMethod;
+    var methodName;
     var pc = self.peerConnection;
-    var setLocalDescription = SIP.Utils.addPromise(pc.setLocalDescription, pc, 3);
 
     self.ready = false;
-
     methodName = self.hasOffer('remote') ? 'createAnswer' : 'createOffer';
-    promisifiedMethod = SIP.Utils.addPromise(SIP.Utils.callbacksLast(pc[methodName], pc));
 
-    return promisifiedMethod(constraints)
-      .then(setLocalDescription)
+    return SIP.Utils.promisify(pc, methodName, true)(constraints)
+      .then(SIP.Utils.promisify(pc, 'setLocalDescription'))
       .then(function onSetLocalDescriptionSuccess() {
         var deferred = SIP.Utils.defer();
         if (pc.iceGatheringState === 'complete' && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')) {
@@ -430,6 +442,7 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
 
         sdp = SIP.Hacks.Chrome.needsExplicitlyInactiveSDP(sdp);
         sdp = SIP.Hacks.AllBrowsers.unmaskDtls(sdp);
+        sdp = SIP.Hacks.Firefox.hasIncompatibleCLineWithSomeSIPEndpoints(sdp);
 
         var sdpWrapper = {
           type: methodName === 'createOffer' ? 'offer' : 'answer',

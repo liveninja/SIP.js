@@ -1,4 +1,4 @@
-module.exports = function (SIP) {
+module.exports = function (SIP, environment) {
 
 var DTMF = require('./Session/DTMF')(SIP);
 
@@ -259,10 +259,10 @@ Session.prototype = {
       var target = request.parseHeader('refer-to').uri;
       if (!target.scheme.match("^sips?$")) {
         var targetString = target.toString();
-        if (typeof global.open === "function") {
-          global.open(targetString);
+        if (typeof environment.open === "function") {
+          environment.open(targetString);
         } else {
-          this.logger.warn("referred to non-SIP URI but `open` isn't a global function: " + targetString);
+          this.logger.warn("referred to non-SIP URI but `open` isn't in the environment: " + targetString);
         }
         return;
       }
@@ -951,8 +951,8 @@ InviteServerContext = function(ua, request) {
   }
 
   //TODO: move this into media handler
-  SIP.Hacks.Firefox.cannotHandleRelayCandidates(request);
   SIP.Hacks.Firefox.cannotHandleExtraWhitespace(request);
+  SIP.Hacks.AllBrowsers.maskDtls(request);
 
   SIP.Utils.augment(this, SIP.ServerContext, [ua, request]);
   SIP.Utils.augment(this, SIP.Session, [ua.configuration.mediaHandlerFactory]);
@@ -1237,7 +1237,7 @@ InviteServerContext.prototype = {
    */
   accept: function(options) {
     options = options || {};
-
+    options = SIP.Utils.desugarSessionOptions(options);
     SIP.Utils.optionsOverride(options, 'media', 'mediaConstraints', true, this.logger, this.ua.configuration.media);
     this.mediaHint = options.media;
 
@@ -1415,8 +1415,8 @@ InviteServerContext.prototype = {
         if (!this.hasAnswer) {
           if(request.body && request.getHeader('content-type') === 'application/sdp') {
             // ACK contains answer to an INVITE w/o SDP negotiation
-            SIP.Hacks.Firefox.cannotHandleRelayCandidates(request);
             SIP.Hacks.Firefox.cannotHandleExtraWhitespace(request);
+            SIP.Hacks.AllBrowsers.maskDtls(request);
 
             this.hasAnswer = true;
             this.mediaHandler.setDescription(request.body)
@@ -1773,7 +1773,6 @@ InviteClientContext.prototype = {
             return;
           }
 
-          SIP.Hacks.Firefox.cannotHandleRelayCandidates(response);
           SIP.Hacks.Firefox.cannotHandleExtraWhitespace(response);
           SIP.Hacks.AllBrowsers.maskDtls(response);
 
@@ -1891,7 +1890,6 @@ InviteClientContext.prototype = {
           break;
         }
 
-        SIP.Hacks.Firefox.cannotHandleRelayCandidates(response);
         SIP.Hacks.Firefox.cannotHandleExtraWhitespace(response);
         SIP.Hacks.AllBrowsers.maskDtls(response);
 

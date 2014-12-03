@@ -194,6 +194,10 @@ UA = function(configuration) {
   if(this.configuration.autostart) {
     this.start();
   }
+
+  if (typeof global.addEventListener === 'function') {
+    global.addEventListener('unload', this.stop.bind(this));
+  }
 };
 UA.prototype = new SIP.EventEmitter();
 
@@ -253,6 +257,7 @@ UA.prototype.afterConnected = function afterConnected (callback) {
  */
 UA.prototype.invite = function(target, options) {
   options = options || {};
+  options = SIP.Utils.desugarSessionOptions(options);
   SIP.Utils.optionsOverride(options, 'media', 'mediaConstraints', true, this.logger);
 
   var context = new SIP.InviteClientContext(this, target, options);
@@ -523,7 +528,9 @@ UA.prototype.onTransportConnected = function(transport) {
   this.error = null;
 
   if(this.configuration.register) {
-    this.registerContext.onTransportConnected();
+    this.configuration.authenticationFactory.initialize().then(function () {
+      this.registerContext.onTransportConnected();
+    }.bind(this));
   }
 
   this.emit('connected', {
@@ -816,6 +823,18 @@ UA.prototype.recoverTransport = function(ua) {
     }, nextRetry * 1000);
 };
 
+function checkAuthenticationFactory (authenticationFactory) {
+  if (!(authenticationFactory instanceof Function)) {
+    return;
+  }
+  if (!authenticationFactory.initialize) {
+    authenticationFactory.initialize = function initialize () {
+      return SIP.Utils.Promise.resolve();
+    };
+  }
+  return authenticationFactory;
+}
+
 /**
  * Configuration load.
  * @private
@@ -860,6 +879,7 @@ UA.prototype.loadConfig = function(configuration) {
       userAgentString: SIP.C.USER_AGENT,
 
       // Session parameters
+      iceCheckingTimeout: 5000,
       noAnswerTimeout: 60,
       stunServers: ['stun:stun.l.google.com:19302'],
       turnServers: [],
@@ -870,6 +890,7 @@ UA.prototype.loadConfig = function(configuration) {
       // Hacks
       hackViaTcp: false,
       hackIpInContact: false,
+      hackWssInTransport: false,
 
       //autostarting
       autostart: true,
@@ -879,9 +900,9 @@ UA.prototype.loadConfig = function(configuration) {
 
       mediaHandlerFactory: SIP.WebRTC.MediaHandler.defaultFactory,
 
-      authenticationFactory: function (ua) {
+      authenticationFactory: checkAuthenticationFactory(function authenticationFactory (ua) {
         return new SIP.DigestAuthentication(ua);
-      }
+      })
     };
 
   // Pre-Configuration
@@ -923,14 +944,19 @@ UA.prototype.loadConfig = function(configuration) {
 
   SIP.Utils.optionsOverride(configuration, 'rel100', 'reliable', true, this.logger, SIP.C.supported.UNSUPPORTED);
 
+  var emptyArraysAllowed = ['stunServers', 'turnServers'];
+
   // Check Optional parameters
   for(parameter in UA.configuration_check.optional) {
     aliasUnderscored(parameter, this.logger);
     if(configuration.hasOwnProperty(parameter)) {
       value = configuration[parameter];
 
-      // If the parameter value is null, empty string,undefined, or empty array then apply its default value.
-      if(value === null || value === "" || value === undefined || (value instanceof Array && value.length === 0)) { continue; }
+      // If the parameter value is an empty array, but shouldn't be, apply its default value.
+      if (value instanceof Array && value.length === 0 && emptyArraysAllowed.indexOf(parameter) < 0) { continue; }
+
+      // If the parameter value is null, empty string, or undefined then apply its default value.
+      if(value === null || value === "" || value === undefined) { continue; }
       // If it's a number with NaN value then also apply its default value.
       // NOTE: JS does not allow "value === NaN", the following does the work:
       else if(typeof(value) === 'number' && isNaN(value)) { continue; }
@@ -996,7 +1022,7 @@ UA.prototype.loadConfig = function(configuration) {
   this.contact = {
     pub_gruu: null,
     temp_gruu: null,
-    uri: new SIP.URI('sip', SIP.Utils.createRandomToken(8), settings.viaHost, null, {transport: 'ws'}),
+    uri: new SIP.URI('sip', SIP.Utils.createRandomToken(8), settings.viaHost, null, {transport: ((settings.hackWssInTransport)?'wss':'ws')}),
     toString: function(options){
       options = options || {};
 
@@ -1006,7 +1032,7 @@ UA.prototype.loadConfig = function(configuration) {
         contact = '<';
 
       if (anonymous) {
-        contact += (this.temp_gruu || 'sip:anonymous@anonymous.invalid;transport=ws').toString();
+        contact += (this.temp_gruu || ('sip:anonymous@anonymous.invalid;transport='+(settings.hackWssInTransport)?'wss':'ws')).toString();
       } else {
         contact += (this.pub_gruu || this.uri).toString();
       }
@@ -1076,6 +1102,8 @@ UA.configuration_skeleton = (function() {
       "displayName",
       "hackViaTcp", // false.
       "hackIpInContact", //false
+      "hackWssInTransport", //false
+      "iceCheckingTimeout",
       "instanceId",
       "noAnswerTimeout", // 30 seconds.
       "password",
@@ -1248,6 +1276,21 @@ UA.configuration_check = {
     hackIpInContact: function(hackIpInContact) {
       if (typeof hackIpInContact === 'boolean') {
         return hackIpInContact;
+      }
+    },
+
+    iceCheckingTimeout: function(iceCheckingTimeout) {
+      if(SIP.Utils.isDecimal(iceCheckingTimeout)) {
+        if (iceCheckingTimeout < 500) {
+          return 5000;
+        }
+        return iceCheckingTimeout;
+      }
+    },
+
+    hackWssInTransport: function(hackWssInTransport) {
+      if (typeof hackWssInTransport === 'boolean') {
+        return hackWssInTransport;
       }
     },
 
@@ -1440,15 +1483,26 @@ UA.configuration_check = {
 
     mediaHandlerFactory: function(mediaHandlerFactory) {
       if (mediaHandlerFactory instanceof Function) {
-        return mediaHandlerFactory;
+        return function promisifiedFactory () {
+          var mediaHandler = mediaHandlerFactory.apply(this, arguments);
+
+          function patchMethod (methodName) {
+            var method = mediaHandler[methodName];
+            if (method.length > 1) {
+              var callbacksFirst = methodName === 'getDescription';
+              mediaHandler[methodName] = SIP.Utils.promisify(mediaHandler, methodName, callbacksFirst);
+            }
+          }
+
+          patchMethod('getDescription');
+          patchMethod('setDescription');
+
+          return mediaHandler;
+        };
       }
     },
 
-    authenticationFactory: function(authenticationFactory) {
-      if (authenticationFactory instanceof Function) {
-        return authenticationFactory;
-      }
-    }
+    authenticationFactory: checkAuthenticationFactory
   }
 };
 

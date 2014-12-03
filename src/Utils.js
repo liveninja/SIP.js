@@ -2,14 +2,12 @@
  * @fileoverview Utils
  */
 
-var promise = global.Promise || require('promiscuous');
-
-module.exports = function (SIP) {
+module.exports = function (SIP, environment) {
 var Utils;
 
 Utils= {
 
-  Promise: promise,
+  Promise: environment.Promise,
 
   defer: function defer () {
     var deferred = {};
@@ -20,29 +18,16 @@ Utils= {
     return deferred;
   },
 
-  callbacksLast: function callbacksLast (f, thisArg) {
-    return function (arg, onSuccess, onFailure) {
-      return f.call(thisArg, onSuccess, onFailure, arg);
-    };
-  },
-
-  addPromise: function addPromise (f, thisArg, length) {
-    if (!f) {
-      f = function (succ, fail) {
-        fail('addPromise: argument function was falsy');
-      };
-      length = f.length;
-    }
-    var callbacksIndex = (length || f.length) - 2;
-    return function withPromise () {
-      var nonCallbacks = [].slice.call(arguments, 0, callbacksIndex);
-      var bound = f.bind.apply(f, [thisArg].concat(nonCallbacks));
-      var promise = new Utils.Promise(bound);
-      var callbacks = [].slice.call(arguments, callbacksIndex);
-      if (callbacks.length) {
-        promise.then.apply(promise, callbacks);
-      }
-      return promise;
+  promisify: function promisify (object, methodName, callbacksFirst) {
+    var oldMethod = object[methodName];
+    return function promisifiedMethod (arg) {
+      return new Utils.Promise(function (resolve, reject) {
+        var oldArgs = [arg, resolve, reject];
+        if (callbacksFirst) {
+          oldArgs = [resolve, reject, arg];
+        }
+        oldMethod.apply(object, oldArgs);
+      });
     };
   },
 
@@ -73,22 +58,27 @@ Utils= {
     options[winner] = options[winner] || options[loser] || defaultValue;
   },
 
-  str_utf8_length: function(string) {
-    return encodeURIComponent(string).replace(/%[A-F\d]{2}/g, 'U').length;
+  desugarSessionOptions: function desugarSessionOptions (options) {
+    if (global.HTMLMediaElement && options instanceof global.HTMLMediaElement) {
+      options = {
+        media: {
+          constraints: {
+            audio: true,
+            video: options.tagName === 'VIDEO'
+          },
+          render: {
+            remote: {
+              video: options
+            }
+          }
+        }
+      };
+    }
+    return options;
   },
 
-  getPrefixedProperty: function (object, name) {
-    if (object == null) {
-      return;
-    }
-    var capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
-    var prefixedNames = [name, 'webkit' + capitalizedName, 'moz' + capitalizedName];
-    for (var i in prefixedNames) {
-      var property = object[prefixedNames[i]];
-      if (property) {
-        return property;
-      }
-    }
+  str_utf8_length: function(string) {
+    return encodeURIComponent(string).replace(/%[A-F\d]{2}/g, 'U').length;
   },
 
   generateFakeSDP: function(body) {

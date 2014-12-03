@@ -6,7 +6,7 @@
  * @class Manages the acquisition and release of MediaStreams.
  * @param {mediaHint} [defaultMediaHint] The mediaHint to use if none is provided to acquire()
  */
-module.exports = function (SIP) {
+module.exports = function (SIP, environment) {
 
 // Default MediaStreamManager provides single-use streams created with getUserMedia
 var MediaStreamManager = function MediaStreamManager (logger, defaultMediaHint) {
@@ -41,20 +41,24 @@ MediaStreamManager.streamId = function (stream) {
 
 MediaStreamManager.render = function render (streams, elements) {
   // only render first stream, see pull request #76
+  streams = [].concat(streams);
   var stream = streams[0];
   if (!elements || !stream) {
     return false;
   }
 
   function attachAndPlay (element, stream) {
-    (global.attachMediaStream || attachMediaStream)(element, stream);
+    if (typeof element === 'function') {
+      element = element();
+    }
+    (environment.attachMediaStream || attachMediaStream)(element, stream);
     ensureMediaPlaying(element);
   }
 
   function attachMediaStream(element, stream) {
     if (typeof element.src !== 'undefined') {
-      global.URL.revokeObjectURL(element.src);
-      element.src = global.URL.createObjectURL(stream);
+      environment.revokeObjectURL(element.src);
+      element.src = environment.createObjectURL(stream);
     } else if (typeof (element.srcObject || element.mozSrcObject) !== 'undefined') {
       element.srcObject = element.mozSrcObject = stream;
     } else {
@@ -88,7 +92,7 @@ MediaStreamManager.render = function render (streams, elements) {
 };
 
 MediaStreamManager.prototype = Object.create(SIP.EventEmitter.prototype, {
-  'acquire': {value: function acquire (mediaHint) {
+  'acquire': {writable: true, value: function acquire (mediaHint) {
     mediaHint = Object.keys(mediaHint || {}).length ? mediaHint : this.mediaHint;
 
     var saveSuccess = function (isHintStream, streams) {
@@ -140,7 +144,7 @@ MediaStreamManager.prototype = Object.create(SIP.EventEmitter.prototype, {
     }
   }},
 
-  'release': {value: function release (streams) {
+  'release': {writable: true, value: function release (streams) {
     streams = [].concat(streams);
     streams.forEach(function (stream) {
       var streamId = MediaStreamManager.streamId(stream);
