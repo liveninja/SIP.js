@@ -26,12 +26,14 @@ var Session, InviteServerContext, InviteClientContext,
  */
 Session = function (mediaHandlerFactory) {
   var events = [
+  'dialog',
   'connecting',
   'terminated',
   'dtmf',
   'invite',
   'cancel',
   'refer',
+  'replaced',
   'bye',
   'hold',
   'unhold',
@@ -202,24 +204,31 @@ Session.prototype = {
   refer: function(target, options) {
     options = options || {};
     var extraHeaders = (options.extraHeaders || []).slice(),
+        withReplaces =
+          target instanceof SIP.InviteServerContext ||
+          target instanceof SIP.InviteClientContext,
         originalTarget = target;
 
     if (target === undefined) {
       throw new TypeError('Not enough arguments');
-    } else if (target instanceof SIP.InviteServerContext || target instanceof SIP.InviteClientContext) {
+    }
+
+    // Check Session Status
+    if (this.status !== C.STATUS_CONFIRMED) {
+      throw new SIP.Exceptions.InvalidStateError(this.status);
+    }
+
+    // transform `target` so that it can be a Refer-To header value
+    if (withReplaces) {
       //Attended Transfer
       // B.transfer(C)
-      extraHeaders.push('Contact: '+ this.contact);
-      extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(this.ua));
-      extraHeaders.push('Refer-To: <' + target.dialog.remote_target.toString() + '?Replaces=' + target.dialog.id.call_id + '%3Bto-tag%3D' + target.dialog.id.remote_tag + '%3Bfrom-tag%3D' + target.dialog.id.local_tag + '>');
+      target = '"' + target.remoteIdentity.friendlyName + '" ' +
+        '<' + target.dialog.remote_target.toString() +
+        '?Replaces=' + target.dialog.id.call_id +
+        '%3Bto-tag%3D' + target.dialog.id.remote_tag +
+        '%3Bfrom-tag%3D' + target.dialog.id.local_tag + '>';
     } else {
       //Blind Transfer
-
-      // Check Session Status
-      if (this.status !== C.STATUS_CONFIRMED) {
-        throw new SIP.Exceptions.InvalidStateError(this.status);
-      }
-
       // normalizeTarget allows instances of SIP.URI to pass through unaltered,
       // so try to make one ahead of time
       try {
@@ -234,29 +243,34 @@ Session.prototype = {
       if (!target) {
         throw new TypeError('Invalid target: ' + originalTarget);
       }
-
-      extraHeaders.push('Contact: '+ this.contact);
-      extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(this.ua));
-      extraHeaders.push('Refer-To: '+ target);
     }
+
+    extraHeaders.push('Contact: '+ this.contact);
+    extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(this.ua));
+    extraHeaders.push('Refer-To: '+ target);
 
     // Send the request
     this.sendRequest(SIP.C.REFER, {
       extraHeaders: extraHeaders,
       body: options.body,
-      receiveResponse: function() {}
+      receiveResponse: function (response) {
+        if ( ! /^2[0-9]{2}$/.test(response.status_code) ) {
+          return;
+        }
+        // hang up only if we transferred to a SIP address
+        if (withReplaces || (target.scheme && target.scheme.match("^sips?$"))) {
+          this.terminate();
+        }
+      }.bind(this)
     });
-    // hang up only if we transferred to a SIP address
-    if (target.scheme.match("^sips?$")) {
-      this.terminate();
-    }
     return this;
   },
 
   followRefer: function followRefer (callback) {
     return function referListener (callback, request) {
       // open non-SIP URIs if possible and keep session open
-      var target = request.parseHeader('refer-to').uri;
+      var referTo = request.parseHeader('refer-to');
+      var target = referTo.uri;
       if (!target.scheme.match("^sips?$")) {
         var targetString = target.toString();
         if (typeof environment.open === "function") {
@@ -269,12 +283,28 @@ Session.prototype = {
 
       SIP.Hacks.Chrome.getsConfusedAboutGUM(this);
 
+      var extraHeaders = [];
+
+      /* Copy the Replaces query into a Replaces header */
+      /* TODO - make sure we don't copy a poorly formatted header? */
+      var replaces = target.getHeader('Replaces');
+      if (replaces !== undefined) {
+        extraHeaders.push('Replaces: ' + decodeURIComponent(replaces));
+      }
+
+      // don't embed headers into Request-URI of INVITE
+      target.clearHeaders();
+
       /*
         Harmless race condition.  Both sides of REFER
         may send a BYE, but in the end the dialogs are destroyed.
       */
-      var referSession = this.ua.invite(request.parseHeader('refer-to').uri, {
-        media: this.mediaHint
+      var referSession = this.ua.invite(target, {
+        media: this.mediaHint,
+        params: {
+          to_displayName: referTo.friendlyName
+        },
+        extraHeaders: extraHeaders
       });
 
       callback.call(this, request, referSession);
@@ -912,6 +942,10 @@ Session.prototype = {
 
     this.startTime = new Date();
 
+    if (this.replacee) {
+      this.replacee.emit('replaced', this);
+      this.replacee.terminate();
+    }
     return this.emit('accepted', response, cause);
   },
 
@@ -1273,6 +1307,7 @@ InviteServerContext.prototype = {
         self.mediaHandler.render();
 
         extraHeaders.push('Contact: ' + self.contact);
+        extraHeaders.push('Allow: ' + SIP.Utils.getAllowedMethods(self.ua));
 
         if(!self.hasOffer) {
           self.hasOffer = true;
@@ -1507,7 +1542,8 @@ SIP.InviteServerContext = InviteServerContext;
 
 InviteClientContext = function(ua, target, options) {
   options = options || {};
-  var requestParams, iceServers,
+  options.params = options.params || {};
+  var iceServers,
     extraHeaders = (options.extraHeaders || []).slice(),
     stunServers = options.stunServers || null,
     turnServers = options.turnServers || null,
@@ -1528,7 +1564,7 @@ InviteClientContext = function(ua, target, options) {
   this.renderbody = options.renderbody || null;
   this.rendertype = options.rendertype || 'text/plain';
 
-  requestParams = {from_tag: this.from_tag};
+  options.params.from_tag = this.from_tag;
 
   /* Do not add ;ob in initial forming dialog requests if the registration over
    *  the current connection got a GRUU URI.
@@ -1539,8 +1575,8 @@ InviteClientContext = function(ua, target, options) {
   });
 
   if (this.anonymous) {
-    requestParams.from_displayName = 'Anonymous';
-    requestParams.from_uri = 'sip:anonymous@anonymous.invalid';
+    options.params.from_displayName = 'Anonymous';
+    options.params.from_uri = 'sip:anonymous@anonymous.invalid';
 
     extraHeaders.push('P-Preferred-Identity: '+ ua.configuration.uri.toString());
     extraHeaders.push('Privacy: id');
@@ -1557,9 +1593,11 @@ InviteClientContext = function(ua, target, options) {
   if (ua.configuration.rel100 === SIP.C.supported.REQUIRED) {
     extraHeaders.push('Require: 100rel');
   }
+  if (ua.configuration.replaces === SIP.C.supported.REQUIRED) {
+    extraHeaders.push('Require: replaces');
+  }
 
   options.extraHeaders = extraHeaders;
-  options.params = requestParams;
 
   SIP.Utils.augment(this, SIP.ClientContext, [ua, SIP.C.INVITE, target, options]);
   SIP.Utils.augment(this, SIP.Session, [ua.configuration.mediaHandlerFactory]);
