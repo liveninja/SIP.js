@@ -84,7 +84,7 @@ var Hacks = module.exports = {
       }
       return sdp;
     },
-    
+
     hasIncompatibleCLineWithSomeSIPEndpoints: function(sdp) {
       /*
        * Firefox appears to be following https://tools.ietf.org/html/rfc5245#section-9.1.1.1
