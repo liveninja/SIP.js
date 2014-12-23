@@ -8,5 +8,5 @@
 // access to the fields it needs.
 module.exports = {
   title: "SIP.js",
-  version: "0.6.2"
+  version: "ln0.6.2"
 };
