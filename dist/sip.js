@@ -1,6 +1,6 @@
 /*
  * SIP version 0.6.4
- * Copyright (c) 2014-2014 Junction Networks, Inc <http://www.onsip.com>
+ * Copyright (c) 2014-2015 Junction Networks, Inc <http://www.onsip.com>
  * Homepage: http://sipjs.com
  * License: http://sipjs.com/license/
  *
@@ -10466,16 +10466,18 @@ module.exports = function (SIP) {
 var MediaHandler = function(session, options) {
   var events = [
     'userMediaRequest',
-    'userMedia',
-    'userMediaFailed',
-    'iceGathering',
-    'iceCandidate',
-    'iceComplete',
-    'iceFailed',
-    'getDescription',
-    'setDescription',
-    'dataChannel',
-    'addStream'
+	'userMedia',
+	'userMediaFailed',
+	'iceGathering',
+	'iceCandidate',
+	'iceComplete',
+	'iceFailed',
+	'iceDisconnected',
+	'iceClosed',
+	'getDescription',
+	'setDescription',
+	'dataChannel',
+	'addStream'
   ];
   options = options || {};
 

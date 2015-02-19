@@ -15,16 +15,18 @@ module.exports = function (SIP) {
 var MediaHandler = function(session, options) {
   var events = [
     'userMediaRequest',
-    'userMedia',
-    'userMediaFailed',
-    'iceGathering',
-    'iceCandidate',
-    'iceComplete',
-    'iceFailed',
-    'getDescription',
-    'setDescription',
-    'dataChannel',
-    'addStream'
+	'userMedia',
+	'userMediaFailed',
+	'iceGathering',
+	'iceCandidate',
+	'iceComplete',
+	'iceFailed',
+	'iceDisconnected',
+	'iceClosed',
+	'getDescription',
+	'setDescription',
+	'dataChannel',
+	'addStream'
   ];
   options = options || {};
 
