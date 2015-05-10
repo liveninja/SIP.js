@@ -7,8 +7,9 @@ describe('Session', function() {
     ua = new SIP.UA({uri: 'alice@example.com'}).start();
 
     Session = new SIP.EventEmitter();
-    Session.initEvents(['progress','accepted','rejected','failed']);
     SIP.Utils.augment(Session, SIP.Session, []);
+
+    Session.logger = new SIP.LoggerFactory().getLogger('sip.session');
 
     Session.ua = ua;
 
@@ -34,19 +35,6 @@ describe('Session', function() {
     if(ua.status !== 2) {
       ua.stop();
     };
-  });
-
-  it('initializes events', function() {
-    expect(Session.checkEvent('connecting')).toBeTruthy();
-    expect(Session.checkEvent('terminated')).toBeTruthy();
-    expect(Session.checkEvent('dtmf')).toBeTruthy();
-    expect(Session.checkEvent('invite')).toBeTruthy();
-    expect(Session.checkEvent('cancel')).toBeTruthy();
-    expect(Session.checkEvent('bye')).toBeTruthy();
-    expect(Session.checkEvent('hold')).toBeTruthy();
-    expect(Session.checkEvent('unhold')).toBeTruthy();
-    expect(Session.checkEvent('muted')).toBeTruthy();
-    expect(Session.checkEvent('unmuted')).toBeTruthy();
   });
 
   it('initializes session objects', function() {
@@ -667,26 +655,23 @@ describe('Session', function() {
 
   describe('.onTransportError', function() {
     beforeEach(function() {
-      spyOn(Session, 'terminated');
       spyOn(Session, 'failed');
     });
 
-    it('does not call failed or terminated if the status is terminated', function() {
+    it('does not call failed if the status is terminated', function() {
       Session.status = 9;
 
       Session.onTransportError();
 
       expect(Session.failed).not.toHaveBeenCalled();
-      expect(Session.terminated).not.toHaveBeenCalled();;
     });
 
-    it('calls terminated if the status is confirmed', function() {
+    it('does not call failed if the status is terminated', function() {
       Session.status = 12;
 
       Session.onTransportError();
 
-      expect(Session.terminated).toHaveBeenCalled();;
-      expect(Session.failed).not.toHaveBeenCalled();;
+      expect(Session.failed).not.toHaveBeenCalled();
     });
 
     it('calls failed if the status is neither terminated or confirmed', function() {
@@ -695,7 +680,6 @@ describe('Session', function() {
       Session.onTransportError();
 
       expect(Session.failed).toHaveBeenCalled();
-      expect(Session.terminated).not.toHaveBeenCalled();
     });
   });
 
@@ -711,7 +695,6 @@ describe('Session', function() {
       Session.onRequestTimeout();
 
       expect(Session.failed).not.toHaveBeenCalled();
-      expect(Session.terminated).not.toHaveBeenCalled();
     });
 
     it('calls terminated if the status is confirmed', function() {
@@ -729,7 +712,6 @@ describe('Session', function() {
       Session.onRequestTimeout();
 
       expect(Session.failed).toHaveBeenCalled();
-      expect(Session.terminated).not.toHaveBeenCalled();
     });
   });
 
@@ -763,7 +745,6 @@ describe('Session', function() {
       Session.onDialogError();
 
       expect(Session.failed).toHaveBeenCalled();
-      expect(Session.terminated).not.toHaveBeenCalled();
     });
   });
 
@@ -842,30 +823,18 @@ describe('Session', function() {
   });
 
   describe('.failed', function() {
-    beforeEach(function() {
-      spyOn(Session, 'close');
+    it('emits and returns Session', function() {
       spyOn(Session, 'emit').and.callThrough();
-    });
-
-    it('calls close, emits, and returns Session', function() {
       expect(Session.failed()).toBe(Session);
-
-      expect(Session.close).toHaveBeenCalled();
-      expect(Session.emit.calls.mostRecent().args[0]).toBe('failed');
+      expect(Session.emit).toHaveBeenCalledWith('failed', null, null);
     });
   });
 
   describe('.rejected', function() {
-    beforeEach(function() {
-      spyOn(Session, 'close');
+    it('emits and returns Session', function() {
       spyOn(Session, 'emit').and.callThrough();
-    });
-
-    it('calls close, emits, and returns Session', function() {
       expect(Session.rejected()).toBe(Session);
-
-      expect(Session.close).toHaveBeenCalled();
-      expect(Session.emit.calls.mostRecent().args[0]).toBe('rejected');
+      expect(Session.emit).toHaveBeenCalledWith('rejected', null, null);
     });
   });
 
@@ -884,15 +853,11 @@ describe('Session', function() {
   });
 
   describe('.canceled', function() {
-    beforeEach(function() {
-      spyOn(Session, 'close');
+    it('emits, and returns Session', function() {
       spyOn(Session, 'emit').and.callThrough();
-    });
-
-    it('calls close, emits, and returns Session', function() {
+      spyOn(Session, 'close').and.callThrough();
       expect(Session.canceled()).toBe(Session);
-
-      expect(Session.close).toHaveBeenCalled();
+      expect(Session.close).not.toHaveBeenCalled();
       expect(Session.emit.calls.mostRecent().args[0]).toBe('cancel');
     });
   });
@@ -1339,7 +1304,7 @@ describe('InviteServerContext', function() {
 
         spyOn(InviteServerContext, 'canceled');
         spyOn(InviteServerContext, 'failed');
-        spyOn(InviteServerContext, 'terminated');
+        spyOn(InviteServerContext, 'terminated').and.callThrough();
         spyOn(SIP.Timers, 'clearTimeout').and.callThrough();
 
         InviteServerContext.timers.prackTimer = SIP.Timers.setTimeout(function(){}, 100);
@@ -1348,7 +1313,6 @@ describe('InviteServerContext', function() {
 
       it('status is WAITING_FOR_ANSWER, timers cleared', function() {
         InviteServerContext.status = 4;
-
         InviteServerContext.receiveRequest(req);
 
         expect(SIP.Timers.clearTimeout).toHaveBeenCalledWith(InviteServerContext.timers.prackTimer);
@@ -1984,8 +1948,8 @@ describe('InviteClientContext', function() {
       expect(InviteClientContext.sendRequest).toHaveBeenCalledWith(SIP.C.ACK, {cseq: response.cseq});
     });
 
-    it('PRACKS any non 200 response when it already chose a dialog', function() {
-      InviteClientContext.dialog = { terminate: function() {} };
+    it('PRACKS any non 200 response that are not retransmissions when it already chose a dialog', function() {
+            InviteClientContext.dialog = { terminate: function() {}, pracked: [] };
       resp = SIP.Parser.parseMessage([
         'SIP/2.0 183 Session In Progress',
         'To: <sip:james@onsnip.onsip.com>;tag=1ma2ki9411',
@@ -2426,15 +2390,7 @@ describe('InviteClientContext', function() {
   });
 
   describe('.terminate', function() {
-    beforeEach(function() {
-      spyOn(InviteClientContext, 'terminated').and.callThrough();
-    });
-
-    afterEach(function() {
-      expect(InviteClientContext.terminated).toHaveBeenCalled();
-    });
-
-    it('calls bye, terminated, and returns this if the status is WAITING_FOR_ACK', function() {
+    it('calls bye and returns this if the status is WAITING_FOR_ACK', function() {
       InviteClientContext.status = 7;
       spyOn(InviteClientContext, 'bye');
 
@@ -2443,7 +2399,7 @@ describe('InviteClientContext', function() {
       expect(InviteClientContext.bye).toHaveBeenCalled();
     });
 
-    it('calls bye, terminated, and returns this if the status is CONFIRMED', function() {
+    it('calls bye and returns this if the status is CONFIRMED', function() {
       InviteClientContext.status = 12;
       spyOn(InviteClientContext, 'bye');
 
@@ -2452,7 +2408,7 @@ describe('InviteClientContext', function() {
       expect(InviteClientContext.bye).toHaveBeenCalled();
     });
 
-    it('calls cancel, terminated, and returns this if the status is anything else', function() {
+    it('calls cancel and returns this if the status is anything else', function() {
       InviteClientContext.status = 0;
       spyOn(InviteClientContext, 'cancel');
 
@@ -2548,6 +2504,10 @@ describe('InviteClientContext', function() {
       spyOn(InviteClientContext, 'terminate');
       spyOn(InviteClientContext.ua, 'invite');
 
+      var oldGetReferMedia = InviteClientContext.mediaHandler.getReferMedia;
+      var referMedia = {key: 'value'};
+      InviteClientContext.mediaHandler.getReferMedia = jasmine.createSpy('getReferMedia').and.returnValue(referMedia);
+
       InviteClientContext.on('refer', InviteClientContext.followRefer(referFollowed));
 
       InviteClientContext.receiveRequest(request);
@@ -2557,8 +2517,11 @@ describe('InviteClientContext', function() {
       expect(request.reply).toHaveBeenCalledWith(202, 'Accepted');
 /*       expect(InviteClientContext.dialog.sendRequest).toHaveBeenCalled(); */
       expect(InviteClientContext.ua.invite).toHaveBeenCalled();
+      expect(InviteClientContext.ua.invite.calls.mostRecent().args[1].media).toBe(referMedia);
       expect(referFollowed).toHaveBeenCalled();
       expect(InviteClientContext.terminate).toHaveBeenCalled();
+
+      InviteClientContext.mediaHandler.getReferMedia = oldGetReferMedia;
     });
   });
 });

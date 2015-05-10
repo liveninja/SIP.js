@@ -1,3 +1,4 @@
+"use strict";
 /**
  * @fileoverview Utils
  */
@@ -56,25 +57,6 @@ Utils= {
     }
 
     options[winner] = options[winner] || options[loser] || defaultValue;
-  },
-
-  desugarSessionOptions: function desugarSessionOptions (options) {
-    if (global.HTMLMediaElement && options instanceof global.HTMLMediaElement) {
-      options = {
-        media: {
-          constraints: {
-            audio: true,
-            video: options.tagName === 'VIDEO'
-          },
-          render: {
-            remote: {
-              video: options
-            }
-          }
-        }
-      };
-    }
-    return options;
   },
 
   str_utf8_length: function(string) {
@@ -303,7 +285,7 @@ Utils= {
       allowed = SIP.UA.C.ALLOWED_METHODS.toString();
 
     for (event in SIP.UA.C.EVENT_METHODS) {
-      if (ua.checkListener(event)) {
+      if (ua.listeners(event).length) {
         allowed += ','+ SIP.UA.C.EVENT_METHODS[event];
       }
     }

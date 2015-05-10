@@ -1,3 +1,4 @@
+"use strict";
 /**
  * @fileoverview MediaHandler
  */
@@ -13,21 +14,6 @@
 module.exports = function (SIP) {
 
 var MediaHandler = function(session, options) {
-  var events = [
-    'userMediaRequest',
-    'userMedia',
-    'userMediaFailed',
-    'iceGathering',
-    'iceCandidate',
-    'iceComplete',
-    'iceFailed',
-    'iceDisconnected',
-    'iceClosed',
-    'getDescription',
-    'setDescription',
-    'dataChannel',
-    'addStream'
-  ];
   options = options || {};
 
   this.logger = session.ua.getLogger('sip.invitecontext.mediahandler', session.id);
@@ -39,7 +25,7 @@ var MediaHandler = function(session, options) {
   this.videoMuted = false;
 
   // old init() from here on
-  var idx, length, server,
+  var idx, jdx, length, server,
     self = this,
     servers = [],
     stunServers = options.stunServers || null,
@@ -65,17 +51,18 @@ var MediaHandler = function(session, options) {
   length = turnServers.length;
   for (idx = 0; idx < length; idx++) {
     server = turnServers[idx];
-    servers.push({
-      'url': server.urls,
-      'username': server.username,
-      'credential': server.password
-    });
+    for (jdx = 0; jdx < server.urls.length; jdx++) {
+      servers.push({
+        'url': server.urls[jdx],
+        'username': server.username,
+        'credential': server.password
+      });
+    }
   }
 
   this.onIceCompleted = SIP.Utils.defer();
   this.onIceCompleted.promise.then(function(pc) {
-    self.logger.log('ICE Gathering Completed');
-    self.emit('iceComplete', pc);
+    self.emit('iceGatheringComplete', pc);
     if (self.iceCheckingTimer) {
       SIP.Timers.clearTimeout(self.iceCheckingTimer);
       self.iceCheckingTimer = null;
@@ -84,8 +71,14 @@ var MediaHandler = function(session, options) {
 
   this.peerConnection = new SIP.WebRTC.RTCPeerConnection({'iceServers': servers}, this.RTCConstraints);
 
+  // Firefox (35.0.1) sometimes throws on calls to peerConnection.getRemoteStreams
+  // even if peerConnection.onaddstream was just called. In order to make
+  // MediaHandler.prototype.getRemoteStreams work, keep track of them manually
+  this._remoteStreams = [];
+
   this.peerConnection.onaddstream = function(e) {
     self.logger.log('stream added: '+ e.stream.id);
+    self._remoteStreams.push(e.stream);
     self.render();
     self.emit('addStream', e);
   };
@@ -114,7 +107,7 @@ var MediaHandler = function(session, options) {
   };
 
   this.peerConnection.oniceconnectionstatechange = function() {  //need e for commented out case
-    self.logger.log('ICE connection state changed to "'+ this.iceConnectionState +'"');
+    var stateEvent;
 
     if (this.iceConnectionState === 'checking') {
       self.iceCheckingTimer = SIP.Timers.setTimeout(function() {
@@ -123,17 +116,34 @@ var MediaHandler = function(session, options) {
       }.bind(this), config.iceCheckingTimeout);
     }
 
-    if (this.iceConnectionState === 'failed') {
-      self.emit('iceFailed', this);
-    }
 
-    if (this.iceConnectionState === 'disconnected') {
-       self.emit('iceDisconnected', this);
+    switch (this.iceConnectionState) {
+    case 'new':
+      stateEvent = 'iceConnection';
+      break;
+    case 'checking':
+      stateEvent = 'iceConnectionChecking';
+      break;
+    case 'connected':
+      stateEvent = 'iceConnectionConnected';
+      break;
+    case 'completed':
+      stateEvent = 'iceConnectionCompleted';
+      break;
+    case 'failed':
+      stateEvent = 'iceConnectionFailed';
+      break;
+    case 'disconnected':
+      stateEvent = 'iceConnectionDisconnected';
+      break;
+    case 'closed':
+      stateEvent = 'iceConnectionClosed';
+      break;
+    default:
+      self.logger.warn('Unknown iceConnection state:', this.iceConnectionState);
+      return;
     }
-
-    if (this.iceConnectionState === 'closed') {
-        self.emit('iceClosed', this);
-    }
+    self.emit(stateEvent, this);
 
     //Bria state changes are always connected -> disconnected -> connected on accept, so session gets terminated
     //normal calls switch from failed to connected in some cases, so checking for failed and terminated
@@ -152,12 +162,8 @@ var MediaHandler = function(session, options) {
     self.logger.log('PeerConnection state changed to "'+ this.readyState +'"');
   };
 
-  this.initEvents(events);
-
   function selfEmit(mh, event) {
-    if (mh.mediaStreamManager.on &&
-        mh.mediaStreamManager.checkEvent &&
-        mh.mediaStreamManager.checkEvent(event)) {
+    if (mh.mediaStreamManager.on) {
       mh.mediaStreamManager.on(event, function () {
         mh.emit.apply(mh, [event].concat(Array.prototype.slice.call(arguments)));
       });
@@ -184,6 +190,7 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
 
   close: {writable: true, value: function close () {
     this.logger.log('closing PeerConnection');
+    this._remoteStreams = [];
     // have to check signalingState since this.close() gets called multiple times
     // TODO figure out why that happens
     if(this.peerConnection && this.peerConnection.signalingState !== 'closed') {
@@ -201,6 +208,10 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
    */
   getDescription: {writable: true, value: function getDescription (mediaHint) {
     var self = this;
+    var acquire = self.mediaStreamManager.acquire;
+    if (acquire.length > 1) {
+      acquire = SIP.Utils.promisify(this.mediaStreamManager, 'acquire', true);
+    }
     mediaHint = mediaHint || {};
     if (mediaHint.dataChannel === true) {
       mediaHint.dataChannel = {};
@@ -220,7 +231,7 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
     }
     else {
       self.logger.log('acquiring local media');
-      streamPromise = self.mediaStreamManager.acquire(mediaHint)
+      streamPromise = acquire.call(self.mediaStreamManager, mediaHint)
         .then(function acquireSucceeded(streams) {
           self.logger.log('acquired local media streams');
           self.localMedia = streams;
@@ -273,6 +284,29 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
 
     var description = new SIP.WebRTC.RTCSessionDescription(rawDescription);
     return SIP.Utils.promisify(this.peerConnection, 'setRemoteDescription')(description);
+  }},
+
+  /**
+   * If the Session associated with this MediaHandler were to be referred,
+   * what mediaHint should be provided to the UA's invite method?
+   */
+  getReferMedia: {writable: true, value: function getReferMedia () {
+    function hasTracks (trackGetter, stream) {
+      return stream[trackGetter]().length > 0;
+    }
+
+    function bothHaveTracks (trackGetter) {
+      /* jshint validthis:true */
+      return this.getLocalStreams().some(hasTracks.bind(null, trackGetter)) &&
+             this.getRemoteStreams().some(hasTracks.bind(null, trackGetter));
+    }
+
+    return {
+      constraints: {
+        audio: bothHaveTracks.call(this, 'getAudioTracks'),
+        video: bothHaveTracks.call(this, 'getVideoTracks')
+      }
+    };
   }},
 
 // Functions the session can use, but only because it's convenient for the application
@@ -388,8 +422,8 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
   getRemoteStreams: {writable: true, value: function getRemoteStreams () {
     var pc = this.peerConnection;
     if (pc && pc.signalingState === 'closed') {
-      this.logger.warn('peerConnection is closed, getRemoteStreams returning []');
-      return [];
+      this.logger.warn('peerConnection is closed, getRemoteStreams returning this._remoteStreams');
+      return this._remoteStreams;
     }
     return(pc.getRemoteStreams && pc.getRemoteStreams()) ||
       pc.remoteStreams || [];
@@ -464,6 +498,7 @@ MediaHandler.prototype = Object.create(SIP.MediaHandler.prototype, {
 
   addStreams: {writable: true, value: function addStreams (streams) {
     try {
+      streams = [].concat(streams);
       streams.forEach(function (stream) {
         this.peerConnection.addStream(stream);
       }, this);

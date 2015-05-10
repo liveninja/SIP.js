@@ -2,10 +2,9 @@
   "name": "sip.js",
   "title": "SIP.js",
   "description": "A simple, intuitive, and powerful JavaScript signaling library",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "main": "src/index.js",
   "browser": {
-    "./src/Grammar/index.js": "./src/Grammar/dist/Grammar.js",
     "./src/environment.js": "./src/environment_browser.js"
   },
   "homepage": "http://sipjs.com",
@@ -27,28 +26,28 @@
     "javascript"
   ],
   "devDependencies": {
+    "browserify": "^4.1.8",
     "grunt": "~0.4.0",
+    "grunt-browserify": "^2.1.0",
     "grunt-cli": "~0.1.6",
+    "grunt-contrib-copy": "^0.5.0",
     "grunt-contrib-jasmine": "~0.8.0",
     "grunt-contrib-jshint": ">0.5.0",
     "grunt-contrib-uglify": "~0.2.0",
     "grunt-peg": "~1.3.1",
     "grunt-trimtrailingspaces": "^0.4.0",
-    "grunt-contrib-copy": "^0.5.0",
-    "browserify": "^4.1.8",
-    "grunt-browserify": "^2.1.0"
+    "pegjs": "^0.8.0"
   },
   "engines": {
     "node": ">=0.8"
   },
   "license": "MIT",
   "scripts": {
-    "postinstall": "cd src/Grammar && mkdir -p dist && pegjs --extra-options-file peg.json src/Grammar.pegjs dist/Grammar.js",
+    "prepublish": "cd src/Grammar && mkdir -p dist && pegjs --extra-options-file peg.json src/Grammar.pegjs dist/Grammar.js",
     "test": "grunt travis --verbose"
   },
   "dependencies": {
-    "pegjs": "0.8.0",
-    "ws": "^0.4.32"
+    "ws": "^0.6.4"
   },
   "optionalDependencies": {
     "promiscuous": "^0.6.0"

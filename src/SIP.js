@@ -20,7 +20,7 @@ Object.defineProperties(SIP, {
 
 require('./Utils')(SIP, environment);
 SIP.LoggerFactory = require('./LoggerFactory')(environment.console);
-require('./EventEmitter')(SIP);
+SIP.EventEmitter = require('./EventEmitter')(environment.console);
 SIP.C = require('./Constants')(SIP.name, SIP.version);
 SIP.Exceptions = require('./Exceptions');
 SIP.Timers = require('./Timers')(environment.timers);
@@ -39,7 +39,7 @@ require('./ServerContext')(SIP);
 require('./Session')(SIP, environment);
 require('./Subscription')(SIP);
 SIP.WebRTC = require('./WebRTC')(SIP, environment);
-require('./UA')(SIP);
+require('./UA')(SIP, environment);
 SIP.Hacks = require('./Hacks')(SIP);
 require('./SanityCheck')(SIP);
 SIP.DigestAuthentication = require('./DigestAuthentication')(SIP.Utils);

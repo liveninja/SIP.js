@@ -1,4 +1,5 @@
-var Grammar = require('./Grammar/index.js');
+"use strict";
+var Grammar = require('./Grammar/dist/Grammar');
 
 module.exports = function (SIP) {
 

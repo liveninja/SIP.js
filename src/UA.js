@@ -1,3 +1,4 @@
+"use strict";
 /**
  * @augments SIP
  * @class Class creating a SIP User Agent.
@@ -7,7 +8,7 @@
  *
  * @param {Object} [configuration.media] gets passed to SIP.MediaHandler.getDescription as mediaHint
  */
-module.exports = function (SIP) {
+module.exports = function (SIP, environment) {
 var UA,
   C = {
     // UA status codes
@@ -48,29 +49,12 @@ var UA,
   };
 
 UA = function(configuration) {
-  var self = this,
-  events = [
-    'connecting',
-    'connected',
-    'disconnected',
-    'newTransaction',
-    'transactionDestroyed',
-    'registered',
-    'unregistered',
-    'registrationFailed',
-    'invite',
-    'newSession',
-    'message'
-  ], i, len;
+  var self = this;
 
   // Helper function for forwarding events
   function selfEmit(type) {
     //registrationFailed handler is invoked with two arguments. Allow event handlers to be invoked with a variable no. of arguments
     return self.emit.bind(self, type);
-  }
-
-  for (i = 0, len = C.ALLOWED_METHODS.length; i < len; i++) {
-    events.push(C.ALLOWED_METHODS[i].toLowerCase());
   }
 
   // Set Accepted Body Types
@@ -178,7 +162,6 @@ UA = function(configuration) {
 
   try {
     this.loadConfig(configuration);
-    this.initEvents(events);
   } catch(e) {
     this.status = C.STATUS_NOT_READY;
     this.error = C.CONFIGURATION_ERROR;
@@ -195,11 +178,11 @@ UA = function(configuration) {
     this.start();
   }
 
-  if (typeof global.addEventListener === 'function') {
-    global.addEventListener('unload', this.stop.bind(this));
+  if (typeof environment.addEventListener === 'function') {
+    environment.addEventListener('unload', this.stop.bind(this));
   }
 };
-UA.prototype = new SIP.EventEmitter();
+UA.prototype = Object.create(SIP.EventEmitter.prototype);
 
 //=================
 //  High Level API
@@ -256,13 +239,9 @@ UA.prototype.afterConnected = function afterConnected (callback) {
  *
  */
 UA.prototype.invite = function(target, options) {
-  options = options || {};
-  options = SIP.Utils.desugarSessionOptions(options);
-  SIP.Utils.optionsOverride(options, 'media', 'mediaConstraints', true, this.logger);
-
   var context = new SIP.InviteClientContext(this, target, options);
 
-  this.afterConnected(context.invite.bind(context, {media: options.media}));
+  this.afterConnected(context.invite.bind(context));
   return context;
 };
 
@@ -288,8 +267,9 @@ UA.prototype.message = function(target, body, options) {
     throw new TypeError('Not enough arguments');
   }
 
-  options = options || {};
-  options.contentType = options.contentType || 'text/plain';
+  // There is no Message module, so it is okay that the UA handles defaults here.
+  options = Object.create(options || Object.prototype);
+  options.contentType || (options.contentType = 'text/plain');
   options.body = body;
 
   return this.request(SIP.C.MESSAGE, target, options);
@@ -312,7 +292,7 @@ UA.prototype.stop = function() {
 
   function transactionsListener() {
     if (ua.nistTransactionsCount === 0 && ua.nictTransactionsCount === 0) {
-        ua.off('transactionDestroyed', transactionsListener);
+        ua.removeListener('transactionDestroyed', transactionsListener);
         ua.transport.disconnect();
     }
   }
@@ -634,7 +614,7 @@ UA.prototype.receiveRequest = function(request) {
       'Accept: '+ C.ACCEPTED_BODY_TYPES
     ]);
   } else if (method === SIP.C.MESSAGE) {
-    if (!this.checkListener(methodLower)) {
+    if (!this.listeners(methodLower).length) {
       // UA is not listening for this.  Reject immediately.
       new SIP.Transactions.NonInviteServerTransaction(request, this);
       request.reply(405, null, ['Allow: '+ SIP.Utils.getAllowedMethods(this)]);
@@ -1441,7 +1421,7 @@ UA.configuration_check = {
     },
 
     turnServers: function(turnServers) {
-      var idx, length, turn_server, url;
+      var idx, jdx, length, turn_server, num_turn_server_urls, url;
 
       if (turnServers instanceof Array) {
         // Do nothing
@@ -1461,13 +1441,15 @@ UA.configuration_check = {
           return;
         }
 
-        if (!(turn_server.urls instanceof Array)) {
+        if (turn_server.urls instanceof Array) {
+          num_turn_server_urls = turn_server.urls.length;
+        } else {
           turn_server.urls = [turn_server.urls];
+          num_turn_server_urls = 1;
         }
 
-        length = turn_server.urls.length;
-        for (idx = 0; idx < length; idx++) {
-          url = turn_server.urls[idx];
+        for (jdx = 0; jdx < num_turn_server_urls; jdx++) {
+          url = turn_server.urls[jdx];
 
           if (!(/^turns?:/.test(url))) {
             url = 'turn:' + url;
@@ -1521,7 +1503,7 @@ UA.configuration_check = {
 
     mediaHandlerFactory: function(mediaHandlerFactory) {
       if (mediaHandlerFactory instanceof Function) {
-        return function promisifiedFactory () {
+        var promisifiedFactory = function promisifiedFactory () {
           var mediaHandler = mediaHandlerFactory.apply(this, arguments);
 
           function patchMethod (methodName) {
@@ -1537,6 +1519,9 @@ UA.configuration_check = {
 
           return mediaHandler;
         };
+
+        promisifiedFactory.isSupported = mediaHandlerFactory.isSupported;
+        return promisifiedFactory;
       }
     },
 

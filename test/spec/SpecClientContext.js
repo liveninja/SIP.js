@@ -1,8 +1,3 @@
-SIP.LoggerFactory.prototype.debug =
-  SIP.LoggerFactory.prototype.log =
-  SIP.LoggerFactory.prototype.warn =
-  SIP.LoggerFactory.prototype.error = function f() {};
-
 describe('ClientContext', function() {
   var ClientContext;
   var ua;
@@ -62,13 +57,6 @@ describe('ClientContext', function() {
 
   it('initializes data', function() {
     expect(ClientContext.data).toBeDefined();
-  });
-
-  it('initializes events', function() {
-    expect(ClientContext.checkEvent('progress')).toBeTruthy();
-    expect(ClientContext.checkEvent('accepted')).toBeTruthy();
-    expect(ClientContext.checkEvent('rejected')).toBeTruthy();
-    expect(ClientContext.checkEvent('failed')).toBeTruthy();
   });
 
   it('checks that the target is not undefined', function() {

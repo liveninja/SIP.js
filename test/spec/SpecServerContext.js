@@ -72,13 +72,6 @@ describe('ServerContext', function() {
     expect(ServerContext.data).toBeDefined();
   });
 
-  it('initializes events', function() {
-    expect(ServerContext.checkEvent('progress')).toBeTruthy();
-    expect(ServerContext.checkEvent('accepted')).toBeTruthy();
-    expect(ServerContext.checkEvent('rejected')).toBeTruthy();
-    expect(ServerContext.checkEvent('failed')).toBeTruthy();
-  });
-
   describe('.progress', function() {
     beforeEach(function() {
       spyOn(ServerContext.request, 'reply').and.returnValue('reply');
@@ -223,8 +216,8 @@ describe('ServerContext', function() {
       spyOn(ServerContext.request, 'reply');
     });
 
-    it('passs along the status code, reason phrase, header, and body as is to request reply', function() {
-      for( var i = 1; i < 700; i++) {
+    it('passes along the status code, reason phrase, header, and body as is to request reply', function() {
+      for( var i = 100; i < 700; i++) {
         var options={statusCode : i ,
                       reasonPhrase : 'reason' ,
                       extraHeaders : 'headers' ,
