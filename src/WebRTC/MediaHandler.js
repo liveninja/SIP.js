@@ -163,7 +163,7 @@ var MediaHandler = function(session, options) {
     } else if (e.currentTarget.iceGatheringState === 'complete' && this.iceConnectionState !== 'closed') {
       self.onIceCompleted(this);
     }*/
-  };
+  }.bind(this.peerConnection);
 
   this.peerConnection.onstatechange = function() {
     self.logger.log('PeerConnection state changed to "'+ this.readyState +'"');
