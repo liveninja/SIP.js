@@ -1,6 +1,6 @@
 /*
  * SIP version 0.7.2
- * Copyright (c) 2014-2015 Junction Networks, Inc <http://www.onsip.com>
+ * Copyright (c) 2014-2016 Junction Networks, Inc <http://www.onsip.com>
  * Homepage: http://sipjs.com
  * License: http://sipjs.com/license/
  *
@@ -11067,7 +11067,7 @@ var MediaHandler = function(session, options) {
     } else if (e.currentTarget.iceGatheringState === 'complete' && this.iceConnectionState !== 'closed') {
       self.onIceCompleted(this);
     }*/
-  };
+  }.bind(this.peerConnection);
 
   this.peerConnection.onstatechange = function() {
     self.logger.log('PeerConnection state changed to "'+ this.readyState +'"');
