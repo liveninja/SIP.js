@@ -229,7 +229,7 @@ Session.prototype = {
     }
 
     extraHeaders.push('Contact: '+ this.contact);
-    extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(this.ua));
+    extraHeaders.push('Allow: '+ SIP.UA.C.ALLOWED_METHODS.toString());
     extraHeaders.push('Refer-To: '+ target);
 
     // Send the request
@@ -471,7 +471,7 @@ Session.prototype = {
   /**
    * Hold
    */
-  hold: function() {
+  hold: function(options) {
 
     if (this.status !== C.STATUS_WAITING_FOR_ACK && this.status !== C.STATUS_CONFIRMED) {
       throw new SIP.Exceptions.InvalidStateError(this.status);
@@ -497,27 +497,28 @@ Session.prototype = {
 
     this.onhold('local');
 
-    this.sendReinvite({
-      mangle: function(body){
+    options = options || {};
+    options.mangle = function(body){
 
-        // Don't receive media
-        // TODO - This will break for media streams with different directions.
-        if (!(/a=(sendrecv|sendonly|recvonly|inactive)/).test(body)) {
-          body = body.replace(/(m=[^\r]*\r\n)/g, '$1a=sendonly\r\n');
-        } else {
-          body = body.replace(/a=sendrecv\r\n/g, 'a=sendonly\r\n');
-          body = body.replace(/a=recvonly\r\n/g, 'a=inactive\r\n');
-        }
-
-        return body;
+      // Don't receive media
+      // TODO - This will break for media streams with different directions.
+      if (!(/a=(sendrecv|sendonly|recvonly|inactive)/).test(body)) {
+        body = body.replace(/(m=[^\r]*\r\n)/g, '$1a=sendonly\r\n');
+      } else {
+        body = body.replace(/a=sendrecv\r\n/g, 'a=sendonly\r\n');
+        body = body.replace(/a=recvonly\r\n/g, 'a=inactive\r\n');
       }
-    });
+
+      return body;
+    };
+
+    this.sendReinvite(options);
   },
 
   /**
    * Unhold
    */
-  unhold: function() {
+  unhold: function(options) {
 
     if (this.status !== C.STATUS_WAITING_FOR_ACK && this.status !== C.STATUS_CONFIRMED) {
       throw new SIP.Exceptions.InvalidStateError(this.status);
@@ -542,7 +543,7 @@ Session.prototype = {
 
     this.onunhold('local');
 
-    this.sendReinvite();
+    this.sendReinvite(options);
   },
 
   /**
@@ -608,19 +609,20 @@ Session.prototype = {
 
     var
       self = this,
-       extraHeaders = (options.extraHeaders || []).slice(),
-       eventHandlers = options.eventHandlers || {},
-       mangle = options.mangle || null;
+      extraHeaders = (options.extraHeaders || []).slice(),
+      eventHandlers = options.eventHandlers || {},
+      mangle = options.mangle || null,
+      succeeded;
 
     if (eventHandlers.succeeded) {
-      this.reinviteSucceeded = eventHandlers.succeeded;
-    } else {
-      this.reinviteSucceeded = function(){
-        SIP.Timers.clearTimeout(self.timers.ackTimer);
-        SIP.Timers.clearTimeout(self.timers.invite2xxTimer);
-        self.status = C.STATUS_CONFIRMED;
-      };
+      succeeded = eventHandlers.succeeded;
     }
+    this.reinviteSucceeded = function(){
+      SIP.Timers.clearTimeout(self.timers.ackTimer);
+      SIP.Timers.clearTimeout(self.timers.invite2xxTimer);
+      self.status = C.STATUS_CONFIRMED;
+      succeeded && succeeded.apply(this, arguments);
+    };
     if (eventHandlers.failed) {
       this.reinviteFailed = eventHandlers.failed;
     } else {
@@ -628,7 +630,7 @@ Session.prototype = {
     }
 
     extraHeaders.push('Contact: ' + this.contact);
-    extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(this.ua));
+    extraHeaders.push('Allow: '+ SIP.UA.C.ALLOWED_METHODS.toString());
     extraHeaders.push('Content-Type: application/sdp');
 
     this.receiveResponse = this.receiveReinviteResponse;
@@ -697,29 +699,33 @@ Session.prototype = {
       case SIP.C.REFER:
         if(this.status ===  C.STATUS_CONFIRMED) {
           this.logger.log('REFER received');
-          request.reply(202, 'Accepted');
-          var
-            hasReferListener = this.listeners('refer').length,
-            notifyBody = hasReferListener ?
-              'SIP/2.0 100 Trying' :
-              // RFC 3515.2.4.2: 'the UA MAY decline the request.'
-              'SIP/2.0 603 Declined'
-          ;
-
-          this.sendRequest(SIP.C.NOTIFY, {
-            extraHeaders:[
-              'Event: refer',
-              'Subscription-State: terminated',
-              'Content-Type: message/sipfrag'
-            ],
-            body: notifyBody,
-            receiveResponse: function() {}
-          });
+          var hasReferListener = this.listeners('refer').length,
+              notifyBody;
 
           if (hasReferListener) {
+            request.reply(202, 'Accepted');
+            notifyBody = 'SIP/2.0 100 Trying';
+
+            this.sendRequest(SIP.C.NOTIFY, {
+              extraHeaders:[
+                'Event: refer',
+                'Subscription-State: terminated',
+                'Content-Type: message/sipfrag'
+              ],
+              body: notifyBody,
+              receiveResponse: function() {}
+            });
+
             this.emit('refer', request);
+          } else {
+            // RFC 3515.2.4.2: 'the UA MAY decline the request.'
+            request.reply(603, 'Declined');
           }
         }
+        break;
+      case SIP.C.NOTIFY:
+        request.reply(200, 'OK');
+        this.emit('notify', request);
         break;
     }
   },
@@ -1197,6 +1203,9 @@ InviteServerContext.prototype = {
       statusCode = options.statusCode || 180,
       reasonPhrase = options.reasonPhrase,
       extraHeaders = (options.extraHeaders || []).slice(),
+      iceServers,
+      stunServers = options.stunServers || null,
+      turnServers = options.turnServers || null,
       body = options.body,
       response;
 
@@ -1206,6 +1215,31 @@ InviteServerContext.prototype = {
 
     if (this.isCanceled || this.status === C.STATUS_TERMINATED) {
       return this;
+    }
+
+    if (stunServers || turnServers) {
+      if (stunServers) {
+        iceServers = SIP.UA.configuration_check.optional['stunServers'](stunServers);
+        if (!iceServers) {
+          throw new TypeError('Invalid stunServers: '+ stunServers);
+        } else {
+          this.stunServers = iceServers;
+        }
+      }
+
+      if (turnServers) {
+        iceServers = SIP.UA.configuration_check.optional['turnServers'](turnServers);
+        if (!iceServers) {
+          throw new TypeError('Invalid turnServers: '+ turnServers);
+        } else {
+          this.turnServers = iceServers;
+        }
+      }
+
+      this.mediaHandler.updateIceServers({
+        stunServers: this.stunServers,
+        turnServers: this.turnServers
+      });
     }
 
     function do100rel() {
@@ -1297,6 +1331,9 @@ InviteServerContext.prototype = {
       request = this.request,
       extraHeaders = (options.extraHeaders || []).slice(),
     //mediaStream = options.mediaStream || null,
+      iceServers,
+      stunServers = options.stunServers || null,
+      turnServers = options.turnServers || null,
       sdpCreationSucceeded = function(body) {
         var
           response,
@@ -1323,7 +1360,7 @@ InviteServerContext.prototype = {
         self.mediaHandler.render();
 
         extraHeaders.push('Contact: ' + self.contact);
-        extraHeaders.push('Allow: ' + SIP.Utils.getAllowedMethods(self.ua));
+        extraHeaders.push('Allow: ' + SIP.UA.C.ALLOWED_METHODS.toString());
 
         if(!self.hasOffer) {
           self.hasOffer = true;
@@ -1359,6 +1396,32 @@ InviteServerContext.prototype = {
       this.status = C.STATUS_ANSWERED;
     } else if (this.status !== C.STATUS_EARLY_MEDIA) {
       throw new SIP.Exceptions.InvalidStateError(this.status);
+    }
+
+    if ((stunServers || turnServers) &&
+        (this.status !== C.STATUS_EARLY_MEDIA && this.status !== C.STATUS_ANSWERED_WAITING_FOR_PRACK)) {
+      if (stunServers) {
+        iceServers = SIP.UA.configuration_check.optional['stunServers'](stunServers);
+        if (!iceServers) {
+          throw new TypeError('Invalid stunServers: '+ stunServers);
+        } else {
+          this.stunServers = iceServers;
+        }
+      }
+
+      if (turnServers) {
+        iceServers = SIP.UA.configuration_check.optional['turnServers'](turnServers);
+        if (!iceServers) {
+          throw new TypeError('Invalid turnServers: '+ turnServers);
+        } else {
+          this.turnServers = iceServers;
+        }
+      }
+
+      this.mediaHandler.updateIceServers({
+        stunServers: this.stunServers,
+        turnServers: this.turnServers
+      });
     }
 
     // An error on dialog creation will fire 'failed' event
@@ -1435,6 +1498,8 @@ InviteServerContext.prototype = {
         this.renderbody = request.body;
         this.rendertype = contentType;
       }
+
+      this.emit('confirmed', request);
     }
 
     switch(request.method) {
@@ -1587,7 +1652,8 @@ InviteClientContext = function(ua, target, options) {
     extraHeaders = (options.extraHeaders || []).slice(),
     stunServers = options.stunServers || null,
     turnServers = options.turnServers || null,
-    isMediaSupported = ua.configuration.mediaHandlerFactory.isSupported;
+    mediaHandlerFactory = options.mediaHandlerFactory || ua.configuration.mediaHandlerFactory,
+    isMediaSupported = mediaHandlerFactory.isSupported;
 
   // Check WebRTC support
   if (isMediaSupported && !isMediaSupported()) {
@@ -1622,7 +1688,7 @@ InviteClientContext = function(ua, target, options) {
     extraHeaders.push('Privacy: id');
   }
   extraHeaders.push('Contact: '+ this.contact);
-  extraHeaders.push('Allow: '+ SIP.Utils.getAllowedMethods(ua));
+  extraHeaders.push('Allow: '+ SIP.UA.C.ALLOWED_METHODS.toString());
   if (!this.inviteWithoutSdp) {
     extraHeaders.push('Content-Type: application/sdp');
   } else if (this.renderbody) {
@@ -1640,7 +1706,7 @@ InviteClientContext = function(ua, target, options) {
   options.extraHeaders = extraHeaders;
 
   SIP.Utils.augment(this, SIP.ClientContext, [ua, SIP.C.INVITE, target, options]);
-  SIP.Utils.augment(this, SIP.Session, [ua.configuration.mediaHandlerFactory]);
+  SIP.Utils.augment(this, SIP.Session, [mediaHandlerFactory]);
 
   // Check Session Status
   if (this.status !== C.STATUS_NULL) {

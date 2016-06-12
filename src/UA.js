@@ -22,22 +22,16 @@ var UA,
     CONFIGURATION_ERROR:  1,
     NETWORK_ERROR:        2,
 
-    /* UA events and corresponding SIP Methods.
-     * Dynamically added to 'Allow' header field if the
-     * corresponding event handler is set.
-     */
-    EVENT_METHODS: {
-      'invite': 'INVITE',
-      'message': 'MESSAGE'
-    },
-
     ALLOWED_METHODS: [
       'ACK',
       'CANCEL',
+      'INVITE',
+      'MESSAGE',
       'BYE',
       'OPTIONS',
       'INFO',
-      'NOTIFY'
+      'NOTIFY',
+      'REFER'
     ],
 
     ACCEPTED_BODY_TYPES: [
@@ -208,7 +202,9 @@ UA.prototype.register = function(options) {
  */
 UA.prototype.unregister = function(options) {
   this.configuration.register = false;
-  this.registerContext.unregister(options);
+
+  var context = this.registerContext;
+  this.afterConnected(context.unregister.bind(context, options));
 
   return this;
 };
@@ -580,7 +576,6 @@ UA.prototype.receiveRequest = function(request) {
     transaction,
     replaces,
     replacedDialog,
-    methodLower = request.method.toLowerCase(),
     self = this;
 
   function ruriMatches (uri) {
@@ -618,16 +613,10 @@ UA.prototype.receiveRequest = function(request) {
   if(method === SIP.C.OPTIONS) {
     new SIP.Transactions.NonInviteServerTransaction(request, this);
     request.reply(200, null, [
-      'Allow: '+ SIP.Utils.getAllowedMethods(this),
+      'Allow: '+ SIP.UA.C.ALLOWED_METHODS.toString(),
       'Accept: '+ C.ACCEPTED_BODY_TYPES
     ]);
   } else if (method === SIP.C.MESSAGE) {
-    if (!this.listeners(methodLower).length) {
-      // UA is not listening for this.  Reject immediately.
-      new SIP.Transactions.NonInviteServerTransaction(request, this);
-      request.reply(405, null, ['Allow: '+ SIP.Utils.getAllowedMethods(this)]);
-      return;
-    }
     message = new SIP.ServerContext(this, request);
     message.body = request.body;
     message.content_type = request.getHeader('Content-Type') || 'text/plain';
@@ -693,6 +682,14 @@ UA.prototype.receiveRequest = function(request) {
          * ACK request without a corresponding Invite Transaction
          * and without To tag.
          */
+        break;
+      case SIP.C.NOTIFY:
+        if (this.configuration.allowLegacyNotifications && this.listeners('notify').length > 0) {
+          request.reply(200, null);
+          self.emit('notify', {request: request});
+        } else {
+          request.reply(481, 'Subscription does not exist');
+        }
         break;
       default:
         request.reply(405);
@@ -886,6 +883,8 @@ UA.prototype.loadConfig = function(configuration) {
 
       keepAliveInterval: 0,
 
+      extraSupported: [],
+
       usePreloadedRoute: false,
 
       //string to be inserted into User-Agent request header
@@ -904,6 +903,7 @@ UA.prototype.loadConfig = function(configuration) {
       hackViaTcp: false,
       hackIpInContact: false,
       hackWssInTransport: false,
+      hackAllowUnregisteredOptionTags: false,
 
       contactTransport: 'ws',
       forceRport: false,
@@ -922,7 +922,9 @@ UA.prototype.loadConfig = function(configuration) {
 
       authenticationFactory: checkAuthenticationFactory(function authenticationFactory (ua) {
         return new SIP.DigestAuthentication(ua);
-      })
+      }),
+
+      allowLegacyNotifications: false
     };
 
   // Pre-Configuration
@@ -1015,7 +1017,7 @@ UA.prototype.loadConfig = function(configuration) {
   // String containing settings.uri without scheme and user.
   hostportParams = settings.uri.clone();
   hostportParams.user = null;
-  settings.hostportParams = hostportParams.toString().replace(/^sip:/i, '');
+  settings.hostportParams = hostportParams.toRaw().replace(/^sip:/i, '');
 
   /* Check whether authorizationUser is explicitly defined.
    * Take 'settings.uri.user' value if not.
@@ -1130,10 +1132,12 @@ UA.configuration_skeleton = (function() {
       "connectionRecoveryMaxInterval",
       "connectionRecoveryMinInterval",
       "keepAliveInterval",
+      "extraSupported",
       "displayName",
       "hackViaTcp", // false.
       "hackIpInContact", //false
       "hackWssInTransport", //false
+      "hackAllowUnregisteredOptionTags", //false
       "contactTransport", // 'ws'
       "forceRport", // false
       "iceCheckingTimeout",
@@ -1157,6 +1161,7 @@ UA.configuration_skeleton = (function() {
       "media",
       "mediaConstraints",
       "authenticationFactory",
+      "allowLegacyNotifications",
 
       // Post-configuration generated parameters
       "via_core_value",
@@ -1318,16 +1323,19 @@ UA.configuration_check = {
 
     iceCheckingTimeout: function(iceCheckingTimeout) {
       if(SIP.Utils.isDecimal(iceCheckingTimeout)) {
-        if (iceCheckingTimeout < 500) {
-          return 5000;
-        }
-        return iceCheckingTimeout;
+        return Math.max(500, iceCheckingTimeout);
       }
     },
 
     hackWssInTransport: function(hackWssInTransport) {
       if (typeof hackWssInTransport === 'boolean') {
         return hackWssInTransport;
+      }
+    },
+
+    hackAllowUnregisteredOptionTags: function(hackAllowUnregisteredOptionTags) {
+      if (typeof hackAllowUnregisteredOptionTags === 'boolean') {
+        return hackAllowUnregisteredOptionTags;
       }
     },
 
@@ -1367,6 +1375,23 @@ UA.configuration_check = {
           return value;
         }
       }
+    },
+
+    extraSupported: function(optionTags) {
+      var idx, length;
+
+      if (!(optionTags instanceof Array)) {
+        return;
+      }
+
+      length = optionTags.length;
+      for (idx = 0; idx < length; idx++) {
+        if (typeof optionTags[idx] !== 'string') {
+          return;
+        }
+      }
+
+      return optionTags;
     },
 
     noAnswerTimeout: function(noAnswerTimeout) {
@@ -1576,7 +1601,13 @@ UA.configuration_check = {
       }
     },
 
-    authenticationFactory: checkAuthenticationFactory
+    authenticationFactory: checkAuthenticationFactory,
+
+    allowLegacyNotifications: function(allowLegacyNotifications) {
+      if (typeof allowLegacyNotifications === 'boolean') {
+        return allowLegacyNotifications;
+      }
+    }
   }
 };
 

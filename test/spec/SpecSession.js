@@ -491,7 +491,6 @@ describe('Session', function() {
   describe('.sendReinvite', function() {
     beforeEach(function() {
       Session.mediaHandler = {getDescription: jasmine.createSpy('getDescription').and.returnValue(SIP.Utils.Promise.resolve(true))};
-      spyOn(SIP.Utils, 'getAllowedMethods').and.returnValue(true);
     });
 
     it('on success, sets receiveResponse, reinviteSucceeded, and reinviteFailed, and calls getDescription', function(){
@@ -1447,6 +1446,7 @@ describe('InviteServerContext', function() {
         InviteServerContext.hasAnswer = true;
 
         spyOn(SIP.Timers, 'clearTimeout').and.callThrough();
+        spyOn(InviteServerContext, 'emit');
         InviteServerContext.dialog = new SIP.Dialog(InviteServerContext, req, 'UAS');
 
         InviteServerContext.receiveRequest(req);
@@ -1455,6 +1455,8 @@ describe('InviteServerContext', function() {
         expect(SIP.Timers.clearTimeout).toHaveBeenCalledWith(InviteServerContext.timers.invite2xxTimer);
 
         expect(InviteServerContext.status).toBe(12);
+        expect(InviteServerContext.emit.calls.mostRecent().args[0]).toBe('confirmed');
+        expect(InviteServerContext.emit.calls.mostRecent().args[1]).toBe(req);
       });
     });
 
@@ -2422,7 +2424,7 @@ describe('InviteClientContext', function() {
     var request;
 
     beforeEach(function() {
-      request = new SIP.OutgoingRequest('INVITE', 'bob@example.com', InviteClientContext.ua, {from: 'abcdefg'}, ['Contact: ' + InviteClientContext.contact, 'Allow: ' + SIP.Utils.getAllowedMethods(InviteClientContext.ua)]);
+      request = new SIP.OutgoingRequest('INVITE', 'bob@example.com', InviteClientContext.ua, {from: 'abcdefg'}, ['Contact: ' + InviteClientContext.contact, 'Allow: ' + SIP.UA.C.ALLOWED_METHODS.toString()]);
 
       request.body = 'a=sendrecv',
       '';
@@ -2520,6 +2522,26 @@ describe('InviteClientContext', function() {
       expect(InviteClientContext.ua.invite.calls.mostRecent().args[1].media).toBe(referMedia);
       expect(referFollowed).toHaveBeenCalled();
       expect(InviteClientContext.terminate).toHaveBeenCalled();
+
+      InviteClientContext.mediaHandler.getReferMedia = oldGetReferMedia;
+    });
+    it('logs then 603 Declines if no session.followRefer listener present', function() {
+      InviteClientContext.status = 12;
+      request.method = SIP.C.REFER;
+      request.parseHeader = jasmine.createSpy('parseHeader').and.returnValue({uri: SIP.URI.parse('sip:carol@example.com')});
+      InviteClientContext.dialog = new SIP.Dialog(InviteClientContext, request, 'UAC');
+
+      spyOn(InviteClientContext.logger, 'log');
+
+      var oldGetReferMedia = InviteClientContext.mediaHandler.getReferMedia;
+      var referMedia = {key: 'value'};
+      InviteClientContext.mediaHandler.getReferMedia = jasmine.createSpy('getReferMedia').and.returnValue(referMedia);
+
+      InviteClientContext.receiveRequest(request);
+      //no way to avoid request.send
+
+      expect(InviteClientContext.logger.log).toHaveBeenCalledWith('REFER received');
+      expect(request.reply).toHaveBeenCalledWith(603, 'Declined');
 
       InviteClientContext.mediaHandler.getReferMedia = oldGetReferMedia;
     });

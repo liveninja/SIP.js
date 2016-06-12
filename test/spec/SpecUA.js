@@ -302,6 +302,8 @@ describe('UA', function() {
 
     beforeEach(function() {
       options = 'options';
+      UA.transport = {};
+      UA.transport.connected = true;
     });
 
     it('does not require any arguments', function () {
@@ -705,38 +707,17 @@ describe('UA', function() {
       expect(replySpy).toHaveBeenCalledWith(200,null,jasmine.any(Array))
     });
 
-    it('checks if there is a listener when the SIP method is message and rejects if no listener is found', function() {
-      var request = { method : SIP.C.MESSAGE ,
-                      ruri : { user : UA.configuration.uri.user } ,
-                      reply : replySpy };
-      UA.listeners = jasmine.createSpy('listeners').and.callFake(function() {
-        return [];
-      });
-      expect(UA.receiveRequest(request)).toBeUndefined();
-      expect(UA.listeners).toHaveBeenCalledWith(request.method.toLowerCase());
-      expect(SIP.Transactions.NonInviteServerTransaction).toHaveBeenCalledWith(request,UA);
-      expect(replySpy).toHaveBeenCalledWith(405, null, jasmine.any(Array));
-    });
-
-    it('checks if there is a listener when the SIP method is message and accepts if listener is found', function() {
-      var callback = jasmine.createSpy('callback').and.callFake(function() {
-        return true;
-      });
+    it('Accepts SIP MESSAGE requests', function() {
       var request = { method : SIP.C.MESSAGE ,
                       ruri : { user : UA.configuration.uri.user } ,
                       reply : replySpy,
                       getHeader: jasmine.createSpy('getHeader')};
-      UA.listeners = jasmine.createSpy('listeners').and.callFake(function() {
-        return [1];
-      });
-      UA.on('message',callback);
 
       UA.receiveRequest(request);
 
       expect(SIP.ServerContext).toHaveBeenCalledWith(UA, request);
       expect(replySpy).toHaveBeenCalledWith(200,null);
       expect(request.getHeader).toHaveBeenCalled();
-      expect(callback).toHaveBeenCalled();
     });
 
     xit('creates a ServerContext if the SIP method is anything besides options, message, invite, and ack', function() {
@@ -797,6 +778,41 @@ describe('UA', function() {
                     reply : replySpy };
       UA.receiveRequest(request);
       expect(replySpy).not.toHaveBeenCalled();
+    });
+
+
+    it('replies with a 481 if allowLegacyNotifications is false when a NOTIFY is received', function() {
+      var request = { method : SIP.C.NOTIFY ,
+                    ruri : { user : UA.configuration.uri.user } ,
+                    reply : replySpy };
+      UA.receiveRequest(request);
+      expect(replySpy).toHaveBeenCalledWith(481, 'Subscription does not exist');
+    });
+
+    it('replies with a 481 if allowLegacyNotifications is true, but no listener is set, when a NOTIFY is received', function() {
+      configuration.allowLegacyNotifications = true;
+      UA = new SIP.UA(configuration);
+
+      var request = { method : SIP.C.NOTIFY ,
+                    ruri : { user : UA.configuration.uri.user } ,
+                    reply : replySpy };
+      UA.receiveRequest(request);
+      expect(replySpy).toHaveBeenCalledWith(481, 'Subscription does not exist');
+    });
+
+    it('emits notified and replies 200 OK if allowLegacyNotifications is true, but no listener is set, when a NOTIFY is received', function() {
+      configuration.allowLegacyNotifications = true;
+      UA = new SIP.UA(configuration);
+      var callback = jasmine.createSpy('callback');
+
+      UA.on('notify', callback);
+
+      var request = { method : SIP.C.NOTIFY ,
+                    ruri : { user : UA.configuration.uri.user } ,
+                    reply : replySpy };
+      UA.receiveRequest(request);
+      expect(replySpy).toHaveBeenCalledWith(200, null);
+      expect(callback).toHaveBeenCalled();
     });
 
     it('replies with a 405 if it cannot interpret the message', function() {
@@ -1129,6 +1145,7 @@ describe('UA', function() {
 
       expect(UA.configuration.rel100).toBe(SIP.C.supported.UNSUPPORTED);
       expect(UA.configuration.replaces).toBe(SIP.C.supported.UNSUPPORTED);
+      expect(UA.configuration.allowLegacyNotifications).toBe(false);
     });
 
     it('throws a configuration error when a mandatory parameter is missing', function() {
@@ -1202,6 +1219,12 @@ describe('UA', function() {
       UA.loadConfig({uri: 'james@onsnip.onsip.com'});
 
       expect(UA.configuration.authorizationUser).toBe(UA.configuration.uri.user);
+    });
+
+    it('sets iceCheckingTimeout as low as 0.5 seconds', function() {
+      UA.loadConfig({iceCheckingTimeout: 0});
+
+      expect(UA.configuration.iceCheckingTimeout).toBe(500);
     });
 
     it('sets the registrarServer to the uri (without user) if it is not passed in', function() {
@@ -1697,7 +1720,7 @@ describe('UA', function() {
       });
     });
 
-    describe('.autoload', function() {
+    describe('.autostart', function() {
       it('fails for all types except boolean', function() {
         expect(SIP.UA.configuration_check.optional.autostart()).toBeUndefined();
         expect(SIP.UA.configuration_check.optional.autostart(7)).toBeUndefined();
@@ -1709,6 +1732,20 @@ describe('UA', function() {
       it('passes for boolean parameters', function() {
         expect(SIP.UA.configuration_check.optional.autostart(true)).toBe(true);
         expect(SIP.UA.configuration_check.optional.autostart(false)).toBe(false);
+      });
+    });
+    describe('.allowLegacyNotifications', function() {
+      it('fails for all types except boolean', function() {
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications()).toBeUndefined();
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications(7)).toBeUndefined();
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications('string')).toBeUndefined();
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications({even: 'objects'})).toBeUndefined();
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications(['arrays'])).toBeUndefined();
+      });
+
+      it('passes for boolean parameters', function() {
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications(true)).toBe(true);
+        expect(SIP.UA.configuration_check.optional.allowLegacyNotifications(false)).toBe(false);
       });
     });
   });

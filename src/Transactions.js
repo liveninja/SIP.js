@@ -235,6 +235,7 @@ InviteClientTransaction.prototype.sendACK = function(response) {
   this.ack += 'To: ' + response.getHeader('to') + '\r\n';
   this.ack += 'From: ' + this.request.headers['From'].toString() + '\r\n';
   this.ack += 'Call-ID: ' + this.request.headers['Call-ID'].toString() + '\r\n';
+  this.ack += 'Content-Length: 0\r\n';
   this.ack += 'CSeq: ' + this.request.headers['CSeq'].toString().split(' ')[0];
   this.ack += ' ACK\r\n\r\n';
 
@@ -648,7 +649,7 @@ var checkTransaction = function(ua, request) {
         if(tr.state === C.STATUS_ACCEPTED) {
           return false;
         } else if(tr.state === C.STATUS_COMPLETED) {
-          tr.state = C.STATUS_CONFIRMED;
+          tr.stateChanged(C.STATUS_CONFIRMED);
           tr.I = SIP.Timers.setTimeout(tr.timer_I.bind(tr), SIP.Timers.TIMER_I);
           return true;
         }
